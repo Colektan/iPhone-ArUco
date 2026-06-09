@@ -1,3 +1,6 @@
 opencv-python
 numpy
 pymobiledevice3
+fastapi
+uvicorn
+websockets
