@@ -175,7 +175,7 @@ def draw_hud(frame, matrix_source, active_matrix, connected, current_raw, tracke
 
 def main():
     # 📌 配置项：请替换为手机屏幕上显示的实际 RTSP 视频流链接
-    rtsp_url = "rtsp://172.22.39.171:8554/"
+    rtsp_url = "rtsp://127.0.0.1:8554/"
     
     # 📌 配置项：ArUco 字典类型（要与您打印的规格保持一致）
     aruco_dict_type = cv2.aruco.DICT_4X4_50
@@ -241,6 +241,7 @@ def main():
         cv2.namedWindow("iPhone ArUco Tracker", cv2.WINDOW_AUTOSIZE)
     
     # 初始化用于延迟测试的定期非阻塞图片保存变量
+    os.makedirs("tmp", exist_ok=True)
     last_save_time = 0.0
     save_interval = 1.0  # 默认每秒保存一次
  
@@ -345,10 +346,10 @@ def main():
                 2
             )
             
-            # 启动线程异步保存图片为唯一的覆写文件 temp_latency.jpg，防止文件堆积
+            # 启动线程异步保存图片为唯一的覆写文件，保存在 tmp 文件夹中，防止文件堆积
             t_save = threading.Thread(
                 target=save_image_async, 
-                args=(frame_to_save, "temp_latency.jpg"), 
+                args=(frame_to_save, os.path.join("tmp", "temp_latency.jpg")), 
                 daemon=True
             )
             t_save.start()
