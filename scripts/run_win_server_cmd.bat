@@ -1,4 +1,5 @@
 @echo off
+cd /d "%~dp0.."
 chcp 65001 >nul
 echo =========================================
 echo  🌐 iPhone ArUco Tracker 网关服务端启动器 (Windows CMD)
@@ -24,6 +25,11 @@ if "%choice%"=="2" (
 
 echo 视频流连接设置为 -> %RTSP_URL%
 set OPENCV_FFMPEG_CAPTURE_OPTIONS=rtsp_transport;%TRANSPORT%^|fflags;nobuffer^|max_delay;100000^|probesize;32^|analyzeduration;100000
+
+:: 检测并清理端口占用 (8000 for FastAPI, 8554 和 8555 for USB 转发)
+for %%p in (8000 8554 8555) do (
+    powershell -Command "$pidToKill = Get-NetTCPConnection -LocalPort %%p -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique; if ($pidToKill) { Write-Host '检测到端口 %%p 已被进程' $pidToKill '占用，正在关闭进程...'; Stop-Process -Id $pidToKill -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+)
 
 if "%START_FORWARD%"=="1" (
     echo 正在启动 USB 端口转发 (8554 和 8555)...

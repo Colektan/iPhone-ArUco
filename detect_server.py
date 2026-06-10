@@ -66,6 +66,8 @@ BOARD_CONFIG_FILE = "custom_board_config.json"
 state_lock = threading.Lock()
 raw_intrinsics = None       # 接收自手机的原始内参 {"fx", "fy", "cx", "cy", "w", "h"}
 intrinsics_connected = False
+camera_connected = False    # 摄像头 RTSP 视频流连接状态
+last_frame_time = 0.0       # 最近一次成功接收视频帧的时间戳
 
 latest_intrinsics_data = {
     "source": "Estimated (Default)",
@@ -219,7 +221,7 @@ def intrinsics_reader_thread(ip, port):
 # =========================================================================
 
 def video_processing_thread(loop, phone_ip):
-    global latest_intrinsics_data, latest_localization_data, latest_table_plane, latest_raw_frame
+    global latest_intrinsics_data, latest_localization_data, latest_table_plane, latest_raw_frame, camera_connected, last_frame_time
     
     # 启动内参接收子线程
     threading.Thread(target=intrinsics_reader_thread, args=(phone_ip, 8555), daemon=True).start()
@@ -228,6 +230,8 @@ def video_processing_thread(loop, phone_ip):
     cap = cv2.VideoCapture(RTSP_URL, cv2.CAP_FFMPEG)
     if not cap.isOpened():
         print("[Video Thread] ❌ 错误：无法打开视频流。")
+        with state_lock:
+            camera_connected = False
         return
 
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -260,12 +264,17 @@ def video_processing_thread(loop, phone_ip):
     while True:
         ret, frame = cap.read()
         if not ret:
+            with state_lock:
+                if time.time() - last_frame_time > 3.0:
+                    camera_connected = False
             continue
 
         # ----------------- A. 相机内参缩放 -----------------
         with state_lock:
             curr_raw = raw_intrinsics
             conn = intrinsics_connected
+            camera_connected = True
+            last_frame_time = time.time()
 
         if curr_raw is not None:
             # 缩放内参
@@ -483,6 +492,21 @@ def startup_event():
     threading.Thread(target=video_processing_thread, args=(loop, phone_ip), daemon=True).start()
 
 
+@app.get("/connectivity")
+def check_connectivity():
+    """
+    HTTP 接口：返回当前服务器与手机（包括视频流及内参服务）的连通性状态。
+    """
+    with state_lock:
+        is_camera_alive = camera_connected and (time.time() - last_frame_time < 3.0)
+        return {
+            "status": "success",
+            "camera_connected": is_camera_alive,
+            "intrinsics_connected": intrinsics_connected,
+            "last_frame_time_elapsed": time.time() - last_frame_time if last_frame_time > 0 else -1
+        }
+
+
 @app.get("/intrinsics")
 def get_intrinsics():
     """
@@ -604,7 +628,7 @@ async def locate_object(req: LocateRequest):
     # 验证输入模式
     req_mode = req.mode.lower()
     if req_mode not in ["segment", "bbox"]:
-        req_mode = "segment"
+        req_mode = "bbox"
 
     # 2. 从多线程缓冲区复制当前最新的一帧画面及相机内参、桌面平面配置
     with state_lock:
