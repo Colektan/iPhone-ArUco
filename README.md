@@ -2,19 +2,43 @@
 
 本模块是配合 iPhone H264 RTSP 视频流服务使用的低延迟定位解算客户端。
 
-主程序为 `detect_aruco.py`，实现低延迟 ArUco 标记 2D/3D 位姿定位与实时相机内参同步。
+主程序为 `detect_server.py`，实现低延迟 ArUco 标记 2D/3D 位姿定位、实时相机内参同步，并集成了基于 Florence-2 大语言视觉模型的 3D 语义物体定位服务。
 
 ---
 
 ## 🛠️ 环境准备与安装
 
-在运行程序之前，请确保已连接您的 iPhone 并且电脑上已准备好 Python 环境。
+在运行程序之前，请确保已连接您的 iPhone 并且电脑上已准备好 Python 环境。我们推荐使用高效的 `uv` 工具来创建虚拟环境并管理依赖包。
 
-### 1. 安装依赖包
-在当前文件夹路径下，使用以下命令一键安装所有必要的依赖库（包含 OpenCV、NumPy 以及跨平台有线端口转发工具 `pymobiledevice3`）：
+### 1. 创建虚拟环境 (使用 uv)
+首先，在项目根目录下创建一个虚拟环境：
 ```bash
-pip install -r requirements.txt
+# 创建虚拟环境（默认会存放在 .venv 目录中）
+uv venv
+
+# 激活虚拟环境
+# macOS / Linux:
+source .venv/bin/activate
+# Windows (CMD):
+.venv\Scripts\activate.bat
+# Windows (PowerShell):
+.venv\Scripts\Activate.ps1
 ```
+
+### 2. 安装依赖包
+根据您的使用场景，使用 `uv pip install` 一键安装依赖库：
+
+* **基础依赖包（ArUco 视频流与物理定位）**：
+  包含 OpenCV、NumPy、FastAPI 以及跨平台有线端口转发工具 `pymobiledevice3` 等。
+  ```bash
+  uv pip install -r requirements.txt
+  ```
+
+* **机器学习依赖包（Florence-2 语义 3D 定位，可选）**：
+  如果您需要运行大模型语义定位服务，请安装以下 ML 依赖项（包含 PyTorch 和 Transformers 等）：
+  ```bash
+  uv pip install -r requirements_ml.txt
+  ```
 
 ---
 
@@ -26,23 +50,23 @@ pip install -r requirements.txt
 - **`[1] USB 有线连接 (推荐)`**：脚本将自动在后台开启 `pymobiledevice3` 端口转发服务（将 iPhone 的 `8554` 和 `8555` 端口映射到电脑的 `127.0.0.1`），然后强制 FFmpeg 使用 TCP 传输协议连接本地流。在主程序退出时，脚本会**自动清理并关闭后台转发进程**，不会占用系统资源。
 - **`[2] Wi-Fi 无线连接`**：直接通过局域网以 UDP 模式低延迟拉流。
 
-请双击或在终端中运行与您的操作系统相匹配的脚本：
+请双击或在终端中运行与您的操作系统相匹配的脚本（脚本已归档在 `scripts` 目录中）：
 
 ### 1. Windows (Command Prompt - CMD)
 ```cmd
-run_win_cmd.bat
+scripts\run_win_server_cmd.bat
 ```
 
 ### 2. Windows (PowerShell)
 ```powershell
-.\run_win_ps.ps1
+.\scripts\run_win_server_ps.ps1
 ```
 
 ### 3. macOS / Linux
 ```bash
-./run_mac.sh
+./scripts/run_server_mac.sh
 ```
-*(注：Mac 脚本已赋予执行权限，若失效可重新运行 `chmod +x run_mac.sh`)*
+*(注：Mac 脚本已赋予执行权限，若失效可重新运行 `chmod +x scripts/run_server_mac.sh`)*
 
 ---
 
