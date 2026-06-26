@@ -70,7 +70,7 @@ def main():
     # 2. 主线程启动 OpenCV 订阅服务端的 HTTP MJPEG 视频流
     # OpenCV 能够原生解析 HTTP MJPEG 边界并当作普通摄像头流读取，极具兼容性
     print(f"\n[Video Client] 正在连接视频流接口: {VIDEO_URL}...")
-    cap = cv2.VideoCapture(VIDEO_URL)
+    cap = cv2.VideoCapture(VIDEO_URL, cv2.CAP_FFMPEG)
     
     if not cap.isOpened():
         print("[Video Client] ❌ 错误：无法打开视频流，请检查网关服务端是否已运行。")

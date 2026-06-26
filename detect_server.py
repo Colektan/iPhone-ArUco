@@ -1,4 +1,16 @@
 import os
+import sys
+
+# 强制 stdout / stderr 使用 UTF-8 编码，防止 Windows 终端下打印 Emoji 时发生 UnicodeEncodeError
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
+
+# 自动配置 OpenCV FFMPEG 极速无缓存参数，防止拉流卡顿与累积延迟
+if "OPENCV_FFMPEG_CAPTURE_OPTIONS" not in os.environ:
+    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp|fflags;nobuffer|max_delay;100000|probesize;32|analyzeduration;100000"
+
 import cv2
 import numpy as np
 import socket
@@ -16,34 +28,38 @@ from pydantic import BaseModel
 # ⚠️ ML 依赖库导入与优雅回退机制
 # =========================================================================
 FLORENCE_AVAILABLE = False
-try:
-    import sys
-    # 1. 强制伪装导入 flash_attn 以避免 Florence-2 内部代码运行时发生 ImportError
-    sys.modules["flash_attn"] = None
-    
-    # 2. 对 Hugging Face transformers 动态模块解析进行 Monkey Patch，绕过环境依赖强检
-    import transformers
-    import transformers.dynamic_module_utils
-    from transformers.dynamic_module_utils import get_imports
-    
-    def patched_get_imports(filename: str):
-        imports = get_imports(filename)
-        if "flash_attn" in imports:
-            imports.remove("flash_attn")
-        return imports
-        
-    transformers.dynamic_module_utils.get_imports = patched_get_imports
-
-    import torch
-    from transformers import AutoProcessor, AutoModelForCausalLM
-    from PIL import Image
-    import io
-    FLORENCE_AVAILABLE = True
-    print("[ML Setup] ✅ 成功加载机器学习核心依赖库并且绕过了 flash_attn 强检")
-except ImportError:
+if os.environ.get("DISABLE_ML", "0") == "1":
     FLORENCE_AVAILABLE = False
-    print("[ML Setup] ⚠️ 未检测到机器学习环境依赖（transformers/torch/timm/einops/pillow）。"
-          "定位接口 /locate_object 将不可用或运行在报错模式，但这不影响基础 ArUco 视频流服务。")
+    print("[ML Setup] 🛑 机器学习环境被 DISABLE_ML=1 禁用。将不加载 Florence-2 服务。")
+else:
+    try:
+        import sys
+        # 1. 强制伪装导入 flash_attn 以避免 Florence-2 内部代码运行时发生 ImportError
+        sys.modules["flash_attn"] = None
+        
+        # 2. 对 Hugging Face transformers 动态模块解析进行 Monkey Patch，绕过环境依赖强检
+        import transformers
+        import transformers.dynamic_module_utils
+        from transformers.dynamic_module_utils import get_imports
+        
+        def patched_get_imports(filename: str):
+            imports = get_imports(filename)
+            if "flash_attn" in imports:
+                imports.remove("flash_attn")
+            return imports
+            
+        transformers.dynamic_module_utils.get_imports = patched_get_imports
+    
+        import torch
+        from transformers import AutoProcessor, AutoModelForCausalLM
+        from PIL import Image
+        import io
+        FLORENCE_AVAILABLE = True
+        print("[ML Setup] ✅ 成功加载机器学习核心依赖库并且绕过了 flash_attn 强检")
+    except ImportError:
+        FLORENCE_AVAILABLE = False
+        print("[ML Setup] ⚠️ 未检测到机器学习环境依赖（transformers/torch/timm/einops/pillow）。"
+              "定位接口 /locate_object 将不可用或运行在报错模式，但这不影响基础 ArUco 视频流服务。")
 
 
 # =========================================================================
@@ -55,7 +71,7 @@ os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"  # 允许 Mac MPS (Metal) 在遇
 # =========================================================================
 # 📌 全局服务配置参数
 # =========================================================================
-RTSP_URL = os.environ.get("RTSP_URL", "rtsp://127.0.0.1:8554/")
+RTSP_URL = os.environ.get("RTSP_URL", "rtsp://127.0.0.1:8554/").strip().strip('"').strip("'")
 ARUCO_DICT_TYPE = cv2.aruco.DICT_4X4_50
 MARKER_LENGTH = 0.027  # 单位：米
 BOARD_CONFIG_FILE = "custom_board_config.json"
@@ -226,29 +242,7 @@ def video_processing_thread(loop, phone_ip):
     # 启动内参接收子线程
     threading.Thread(target=intrinsics_reader_thread, args=(phone_ip, 8555), daemon=True).start()
 
-    print(f"[Video Thread] 正在建立 RTSP 连接 -> {RTSP_URL}")
-    cap = cv2.VideoCapture(RTSP_URL, cv2.CAP_FFMPEG)
-    if not cap.isOpened():
-        print("[Video Thread] ❌ 错误：无法打开视频流。")
-        with state_lock:
-            camera_connected = False
-        return
-
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    print(f"[Video Thread] ✅ 视频连接成功！分辨率: {width}x{height} | 帧率: {fps} FPS")
-
-    # 1. 估算默认备用内参矩阵
-    focal_length = width * 0.8
-    fallback_matrix = np.array([
-        [focal_length, 0, width / 2.0],
-        [0, focal_length, height / 2.0],
-        [0, 0, 1]
-    ], dtype=np.float32)
-    dist_coeffs = np.zeros((5, 1), dtype=np.float32)
-
-    # 2. 建立单码 ArUco 3D 物理边界坐标点集
+    # 1. 建立单码 ArUco 3D 物理边界坐标点集
     marker_points = np.array([
         [-MARKER_LENGTH / 2.0,  MARKER_LENGTH / 2.0, 0],
         [ MARKER_LENGTH / 2.0,  MARKER_LENGTH / 2.0, 0],
@@ -260,14 +254,74 @@ def video_processing_thread(loop, phone_ip):
     aruco_dict = cv2.aruco.getPredefinedDictionary(ARUCO_DICT_TYPE)
     detector_params = cv2.aruco.DetectorParameters()
     detector = cv2.aruco.ArucoDetector(aruco_dict, detector_params)
+    dist_coeffs = np.zeros((5, 1), dtype=np.float32)
+
+    cap = None
+    consecutive_failures = 0
+    fallback_matrix = None
+    width, height = 0, 0
 
     while True:
+        # 防御性检查：防止空地址/无效地址触发 OpenCV/FFMPEG 锁死 GIL 导致 FastAPI 无法正常绑定端口启动
+        try:
+            parsed = urlparse(RTSP_URL)
+            host = parsed.hostname
+            if not host or host.strip() == "":
+                print(f"[Video Thread] ⚠️ 检测到无效 of RTSP 地址 ({RTSP_URL})，跳过拉流以防止 GIL 锁死。请检查启动脚本参数并重新输入...")
+                with state_lock:
+                    camera_connected = False
+                time.sleep(2.0)
+                continue
+        except Exception as e:
+            print(f"[Video Thread] ⚠️ 解析 RTSP 地址失败 ({e})")
+            time.sleep(2.0)
+            continue
+
+        if cap is None or not cap.isOpened():
+            print(f"[Video Thread] 正在建立/重连 RTSP 连接 -> {RTSP_URL}")
+            cap = cv2.VideoCapture(RTSP_URL, cv2.CAP_FFMPEG)
+            if not cap.isOpened():
+                print("[Video Thread] ❌ 错误：无法打开视频流，将在 2 秒后自动重试...")
+                with state_lock:
+                    camera_connected = False
+                time.sleep(2.0)
+                continue
+
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            print(f"[Video Thread] ✅ 视频连接成功！分辨率: {width}x{height} | 帧率: {fps} FPS")
+
+            # 2. 估算默认备用内参矩阵
+            focal_length = width * 0.8
+            fallback_matrix = np.array([
+                [focal_length, 0, width / 2.0],
+                [0, focal_length, height / 2.0],
+                [0, 0, 1]
+            ], dtype=np.float32)
+            consecutive_failures = 0
+
         ret, frame = cap.read()
         if not ret:
+            consecutive_failures += 1
             with state_lock:
                 if time.time() - last_frame_time > 3.0:
                     camera_connected = False
+            if consecutive_failures > 30:
+                print("[Video Thread] ⚠️ 连续读取帧失败，判定连接断开，准备重连...")
+                cap.release()
+                cap = None
+            time.sleep(0.03)
             continue
+
+        consecutive_failures = 0
+
+        # 🖥️ 【诊断测试】直接在网关子线程中创建本地窗口预览视频流（避开 FastAPI/Web 传输层）
+        try:
+            cv2.imshow("Direct Server Feed Preview (Diagnostic)", frame)
+            cv2.waitKey(1)
+        except Exception as e:
+            print(f"[Video Thread] ⚠️ 本地诊断窗口渲染异常: {e}")
 
         # ----------------- A. 相机内参缩放 -----------------
         with state_lock:
@@ -419,6 +473,9 @@ def video_processing_thread(loop, phone_ip):
                 jpeg_bytes = jpeg_buf.tobytes()
                 for q in list(active_video_queues):
                     loop.call_soon_threadsafe(q.put_nowait, jpeg_bytes)
+        
+        # 释放 GIL 锁，防止后台线程 100% 占用 CPU 导致主线程 (Uvicorn) 无法正常绑定端口启动
+        time.sleep(0.001)
 
 
 # =========================================================================
@@ -484,8 +541,10 @@ def startup_event():
     # 开启视频流采集
     loop = asyncio.get_running_loop()
     try:
-        parsed_url = urlparse(RTSP_URL)
-        phone_ip = parsed_url.hostname or RTSP_URL.split("//")[1].split(":")[0]
+        url_cleaned = RTSP_URL.strip().strip('"').strip("'")
+        parsed_url = urlparse(url_cleaned)
+        phone_ip = parsed_url.hostname or url_cleaned.split("//")[1].split(":")[0]
+        phone_ip = phone_ip.strip()
     except Exception:
         phone_ip = "127.0.0.1"
         
